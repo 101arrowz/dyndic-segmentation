@@ -182,11 +182,10 @@ fn segment(
 }
 
 fn main() -> Result<(), Box<dyn Send + Sync + error::Error>> {
-    let start_time = time::Instant::now();
     let cli = env::args().count() > 1;
-    let completion = if cli {
+    let (start_time, completion) = if cli {
         let args = Args::parse();
-        segment(args.images, &args.out_dir)
+        (time::Instant::now(), segment(args.images, &args.out_dir))
     } else {
         println!("Select folders to process");
         let paths = FileDialog::new()
@@ -201,7 +200,7 @@ fn main() -> Result<(), Box<dyn Send + Sync + error::Error>> {
             .set_file_name("out")
             .save_file()
             .ok_or::<Box<dyn Send + Sync + error::Error>>("No folders selected".into())?;
-        segment(paths, &out_path)
+        (time::Instant::now(), segment(paths, &out_path))
     };
     let end_time = time::Instant::now();
     let delta_t = end_time - start_time;
