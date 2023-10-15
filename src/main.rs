@@ -1,15 +1,16 @@
 use clap::Parser;
 use image::{io::Reader as ImageReader, ImageBuffer, Luma};
 use rayon::prelude::*;
-use std::{collections, error, f64, fs, path, time};
+use rfd::{FileDialog, MessageButtons, MessageDialog};
+use std::{collections, env, error, f64, fs, path, time};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[arg(short, long, num_args = 0.., help = "List of files or directories to process")]
-    images: Vec<String>,
+    images: Vec<path::PathBuf>,
     #[arg(short, long, help = "Output directory", default_value = "out")]
-    out_dir: String,
+    out_dir: path::PathBuf,
 }
 
 enum GenResult {
@@ -78,15 +79,13 @@ impl Iterator for GenResult {
 const MAX_BLACK: u8 = 40;
 const MAX_GRAY: u8 = 60;
 
-fn main() -> Result<(), Box<dyn Send + Sync + error::Error>> {
-    let args = Args::parse();
-    let root_path = path::Path::new(&args.out_dir);
-    let start_time = time::Instant::now();
-    let completion = args
-        .images
-        .par_iter()
-        .flat_map(|path| {
-            let base = path::PathBuf::from(path);
+fn segment(
+    images: impl IntoParallelIterator<Item = path::PathBuf>,
+    out_dir: &path::Path,
+) -> Vec<Result<path::PathBuf, Box<dyn Send + Sync + error::Error>>> {
+    images
+        .into_par_iter()
+        .flat_map(|base| {
             let res: GenResult = base.clone().into();
             let is_dir = matches!(res, GenResult::Dir(_, _));
             res.map(move |p| {
@@ -166,7 +165,7 @@ fn main() -> Result<(), Box<dyn Send + Sync + error::Error>> {
                 }
             }
             image::imageops::colorops::invert(&mut out);
-            let target = root_path.join(rel);
+            let target = out_dir.join(rel);
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent)?;
             }
@@ -179,15 +178,47 @@ fn main() -> Result<(), Box<dyn Send + Sync + error::Error>> {
             }
         })
         .map(|res| res.map(|(_, target)| target))
-        .collect::<Vec<Result<path::PathBuf, Box<dyn Send + Sync + error::Error>>>>();
+        .collect()
+}
 
+fn main() -> Result<(), Box<dyn Send + Sync + error::Error>> {
+    let start_time = time::Instant::now();
+    let cli = env::args().count() > 1;
+    let completion = if cli {
+        let args = Args::parse();
+        segment(args.images, &args.out_dir)
+    } else {
+        println!("Select folders to process");
+        let paths = FileDialog::new()
+            .set_directory(env::current_dir()?)
+            .set_title("Select folders to process")
+            .pick_folders()
+            .ok_or::<Box<dyn Send + Sync + error::Error>>("No folders selected".into())?;
+        println!("Select folder to save to");
+        let out_path = FileDialog::new()
+            .set_title("Select folder to save to")
+            .set_directory(env::current_dir()?)
+            .set_file_name("out")
+            .save_file()
+            .ok_or::<Box<dyn Send + Sync + error::Error>>("No folders selected".into())?;
+        segment(paths, &out_path)
+    };
     let end_time = time::Instant::now();
     let delta_t = end_time - start_time;
-    println!(
+    let message = format!(
         "Processed {} images in {:.3}s ({} errors)",
         completion.iter().filter(|v| v.is_ok()).count(),
         delta_t.as_secs_f64(),
         completion.iter().filter(|v| v.is_err()).count()
     );
+    if cli {
+        println!("{}", message);
+    } else {
+        MessageDialog::new()
+            .set_title("Processing complete")
+            .set_description(message)
+            .set_buttons(MessageButtons::Ok)
+            .show();
+    }
     Ok(())
 }
